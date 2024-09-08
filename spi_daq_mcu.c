@@ -4,6 +4,7 @@
 // PJ
 // 2024-09-05 Bring up the board by flashing the LEDs.
 // 2024-09-08 SPI slave firmware to respond to commands as in document TB3215.
+//            Change to using SPI buffered mode so we can send an array.
 
 // This version string will be reported by the version command.
 #define VERSION_STR "v0.0 AVR64EA28 SPI-ADC 2024-09-08"
@@ -26,10 +27,11 @@
 
 // The SPI peripheral will exchange data with the master MCU
 // via the following buffers.
-#define NBUF 64
+#define NBUF 32
 volatile uint8_t inBuf[NBUF];
 volatile uint8_t outBuf[NBUF];
-volatile uint8_t nBytes = 0; // Number of bytes in inBuf after the last exchange.
+volatile uint8_t nBytesIn = 0; // Number of bytes in inBuf after the last exchange.
+volatile uint8_t nBytesOut = 0;
 volatile uint8_t newData = 0; // A flag to indicate that new data has arrived.
 
 
@@ -57,20 +59,53 @@ void spi0_init(void)
     PORTA.DIR |= PIN5_bm; // MISO as output
     PORTA.DIR &= ~PIN6_bm; // SCK as input
     PORTA.DIR &= ~PIN7_bm; // SS as input
+    // We will use the SS pin transition interrupts
+    // to start and stop the SPI transaction.
+    PORTA.PIN7CTRL = PORT_PULLUPEN_bm | PORT_ISC_BOTHEDGES_gc;
+    PORTA.INTFLAGS |= PIN7_bm;
     //
     SPI0.CTRLA = SPI_ENABLE_bm & (~SPI_MASTER_bm); // Slave mode
-    SPI0.INTCTRL = SPI_IE_bm;
+    SPI0.CTRLB = SPI_BUFEN_bm & (~SPI_BUFWR_bm); // Buffer mode, write dummy byte
+    // default SPI mode 0
+    SPI0.INTCTRL = SPI_RXCIE_bm | SPI_TXCIE_bm | SPI_DREIE_bm;
+}
+
+ISR(PORTA_PORT_vect)
+{
+    if (PORTA.INTFLAGS & PIN7_bm) {
+        if (PORTA.IN & PIN7_bm) {
+            // Pin has gone high for end of the SPI transaction.
+            newData = 1;
+        } else {
+            // Pin has gone low; Start a new SPI transaction.
+            nBytesIn = 0;
+            nBytesOut = 0;
+        }
+    }
+    PORTA.INTFLAGS = PORT_INT_gm;
 }
 
 ISR(SPI0_INT_vect)
 {
-    // For the moment, we follow TB3215 closely
-    // and just handle a single byte.
-    inBuf[0] = SPI0.DATA;
-    SPI0.DATA = outBuf[0]; // Will be sent next time.
-    nBytes = 1;
-    newData = 1;
-    SPI0.INTFLAGS = SPI_IF_bm;
+    // We arrive here if the incoming buffer gets full or
+    // if a transmission has completed or 
+    // if the outgoing data register is empty.
+    //
+    // Read all available incoming bytes.
+    // It we fill the incoming buffer, we just overwrite the final place.
+    while (SPI0.INTFLAGS & SPI_RXCIF_bm) {
+        inBuf[nBytesIn] = SPI0.DATA;
+        if (nBytesIn+1 < NBUF) ++nBytesIn;
+    }
+    // Fill up the outgoing register if it is empty.
+    // Once we run out of bytes, we reuse the last one.
+    while (SPI0.INTFLAGS & SPI_DREIF_bm) {
+        SPI0.DATA = outBuf[nBytesOut];
+        if (nBytesOut+1 < NBUF) ++nBytesOut;
+    }
+    if (SPI0.INTFLAGS & SPI_TXCIF_bm) {
+        SPI0.INTFLAGS = SPI_TXCIF_bm;
+    }
 }
 
 void do_command()
@@ -84,16 +119,22 @@ void do_command()
             // to be exchanged with the master MCU.
             break;
         case 125:
-            for (uint8_t i=0; i < NBUF; ++i) outBuf[i] = 0;
-            nchar = snprintf(outBuf, NBUF, "%s", VERSION_STR);
+            // Insert a known set of data bytes.
+            outBuf[0] = 0xde; outBuf[1] = 0xad;
+            outBuf[2] = 0xbe; outBuf[3] = 0xef;
+            outBuf[4] = 0xde; outBuf[5] = 0xad;
+            outBuf[6] = 0xbe; outBuf[7] = 0xef;
+            for (uint8_t i=8; i < NBUF; ++i) outBuf[i] = 0;
             break;
         case 127:
             LED_ON();
             outBuf[0] = 1;
+            for (uint8_t i=1; i < NBUF; ++i) outBuf[i] = 0;
             break;
         case 126:
             LED_OFF();
             outBuf[0] = 0;
+            for (uint8_t i=1; i < NBUF; ++i) outBuf[i] = 0;
             break;
     }
 }
