@@ -6,8 +6,8 @@
 // 2024-09-08 SPI slave firmware to respond to commands as in document TB3215.
 //            Change to using SPI buffered mode so we can send an array.
 
-// This version string will be reported by the version command.
-#define VERSION_STR "v0.0 AVR64EA28 SPI-ADC 2024-09-08"
+// This version string will be reported by the version command (124)
+#define VERSION_STR "v0.1 2024-09-09"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -65,7 +65,7 @@ void spi0_init(void)
     PORTA.INTFLAGS |= PIN7_bm;
     //
     SPI0.CTRLA = SPI_ENABLE_bm & (~SPI_MASTER_bm); // Slave mode
-    SPI0.CTRLB = SPI_BUFEN_bm & (~SPI_BUFWR_bm); // Buffer mode, write dummy byte
+    SPI0.CTRLB = SPI_BUFEN_bm | SPI_BUFWR_bm; // Buffer mode, don't write dummy byte
     // default SPI mode 0
     SPI0.INTCTRL = SPI_RXCIE_bm | SPI_TXCIE_bm | SPI_DREIE_bm;
 }
@@ -80,6 +80,10 @@ ISR(PORTA_PORT_vect)
             // Pin has gone low; Start a new SPI transaction.
             nBytesIn = 0;
             nBytesOut = 0;
+            // Because we only start putting the outgoing buffer's bytes
+            // into the SPI.DATA register once the interrupt routine is called,
+            // the first two bytes that are sent appear to be the values
+            // already in the buffer and DATA register at chip-select time.
         }
     }
     PORTA.INTFLAGS = PORT_INT_gm;
@@ -87,7 +91,7 @@ ISR(PORTA_PORT_vect)
 
 ISR(SPI0_INT_vect)
 {
-    // We arrive here if the incoming buffer gets full or
+    // We arrive here if the SPI's incoming buffer gets full or
     // if a transmission has completed or 
     // if the outgoing data register is empty.
     //
@@ -117,6 +121,10 @@ void do_command()
         case 0:
             // Nil command, to allow previously-set outBuf data
             // to be exchanged with the master MCU.
+            break;
+        case 124:
+            // Copy the version string into the outgoing buffer.
+            strncpy(outBuf, VERSION_STR, NBUF-1);
             break;
         case 125:
             // Insert a known set of data bytes.
