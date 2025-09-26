@@ -5,9 +5,10 @@
 // 2024-09-05 Bring up the board by flashing the LEDs.
 // 2024-09-08 SPI slave firmware to respond to commands as in document TB3215.
 //            Change to using SPI buffered mode so we can send an array.
+// 2025-09-26 Update for use on the manufactured PCB.
 
 // This version string will be reported by the version command (124)
-#define VERSION_STR "v0.1 2024-09-09"
+#define VERSION_STR "v0.2 2025-09-26"
 
 #include "global_defs.h"
 #include <xc.h>
