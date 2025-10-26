@@ -9,7 +9,7 @@
 // 2025-10-17,18 Have the analog sampling happening.
 
 // This version string will be reported by the version command (124)
-#define VERSION_STR "v0.3 2025-10-17"
+#define VERSION_STR "v0.4 2025-10-26"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -46,13 +46,15 @@ uint8_t overrideLED = 0;
 // [2] : PGA flag, 0==direct sampling, 1==via PGA
 // [3] : PGA gain, 0==1X, 1==2X, 2==4X, 3==8X, 4==16X
 // [4] : samples in burst mode: 0==single sample, n>0 2**n samples in burst mode
-#define NREG 5
+// [5] : allow_LED, 1==ALLOW 0==SUPPRESS
+#define NREG 6
 volatile uint8_t vreg[NREG] = {
     0, // IDLE
     3, // V_REF==4v096
     0, // direct sampling without PGA
     0, // 1X
-    4  // 4 (16 samples in burst mode)
+    4, // 4 (16 samples in burst mode)
+    1  // allow use of LED
 };
 #define IDLE 0
 #define SAMPLING 1
@@ -292,6 +294,9 @@ void do_command()
             adc0_close();
             need_to_init_ADC = 1;
             break;
+        case 117: // 0x75
+            vreg[5] = inBuf[1]; // 1==ALLOW 0==SUPPRESS LED
+            break;
         case 124: // 0x7c
             // Copy the version string into the outgoing buffer.
             strncpy(outBuf, VERSION_STR, NBUF-1);
@@ -311,9 +316,15 @@ void do_command()
             for (uint8_t i=1; i < NBUF; ++i) outBuf[i] = 0;
             break;
         case 127: // 0x7f
-            overrideLED = 1;
-            LED_ON();
-            outBuf[0] = 1;
+            if (vreg[5]) {
+                // We are allowed to turn on LED.
+                overrideLED = 1;
+                LED_ON();
+                outBuf[0] = 1;
+            } else {
+                // LED is suppressed.
+                outBuf[0] = 0;
+            }
             for (uint8_t i=1; i < NBUF; ++i) outBuf[i] = 0;
             break;
         default: { /* do nothing */ }
@@ -347,7 +358,7 @@ int main(void)
         }
         if (vreg[0] == SAMPLING) {
             // Sample all analog channels.
-            if (!overrideLED) LED_ON();
+            if (vreg[5] && !overrideLED) LED_ON(); // turn on if not suppressed
             // Build up the ADC command-register byte from our options.
             uint8_t adc_cmd = ADC_DIFF_bm;
             adc_cmd |= ADC_START_IMMEDIATE_gc;
@@ -380,7 +391,7 @@ int main(void)
                 ADC0.COMMAND = ADC_START_STOP_gc;
                 analogData[i] = (int16_t)ADC0.RESULT; // 16-bit value only
             }
-            if (!overrideLED) LED_OFF();
+            if (!overrideLED) LED_OFF(); // Turn off only if not manually turned on.
         }
     }
     return 0;
