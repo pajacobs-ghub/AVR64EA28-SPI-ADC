@@ -7,9 +7,10 @@
 //            Change to using SPI buffered mode so we can send an array.
 // 2025-09-26 Update for use on the manufactured PCB.
 // 2025-10-17,18 Have the analog sampling happening.
+// 2026-04-27 CRC for SPI transfer of analog data.
 
 // This version string will be reported by the version command (124)
-#define VERSION_STR "v0.4 2025-10-26"
+#define VERSION_STR "v0.5 2026-04-27"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -21,6 +22,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "crc16.h"
 
 #pragma config PERIOD = PERIOD_OFF, WINDOW = WINDOW_OFF
 #pragma config SLEEP = SLEEP_DISABLE, ACTIVE = ACTIVE_DISABLE, SAMPFREQ = SAMPFREQ_128HZ, LVL = LVL_BODLEVEL0
@@ -248,7 +250,7 @@ ISR(SPI0_INT_vect)
 void do_command()
 {
     // We are working here with the interrupts off, so do not dally.
-    int nchar;
+    uint16_t crc_value;
     uint8_t cmd = inBuf[0];
     switch (cmd) {
         case 0:
@@ -262,7 +264,10 @@ void do_command()
                 outBuf[i*2] = (uint8_t)((analogData[i] & 0xff00) >> 8);
                 outBuf[i*2+1] = (uint8_t)(analogData[i] & 0x00ff);
             }
-            for (uint8_t i=NCHAN*2; i < NBUF; ++i) outBuf[i] = 0;
+            crc_value = crc16b(outBuf, NCHAN*2, 0xffff);
+            outBuf[NCHAN*2] = (uint8_t)((crc_value & 0xff00) >> 8);
+            outBuf[NCHAN*2+1] = (uint8_t)(crc_value & 0x00ff);
+            for (uint8_t i=NCHAN*2+2; i < NBUF; ++i) outBuf[i] = 0;
             break;
         case 96: //0x60
             // Write virtual register values to outgoing buffer.
@@ -299,7 +304,7 @@ void do_command()
             break;
         case 124: // 0x7c
             // Copy the version string into the outgoing buffer.
-            strncpy(outBuf, VERSION_STR, NBUF-1);
+            strncpy((char *)outBuf, VERSION_STR, NBUF-1);
             break;
         case 125: // 0x7d
             // Insert a known set of data bytes.
